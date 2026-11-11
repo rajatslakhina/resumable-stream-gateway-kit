@@ -318,18 +318,35 @@ final class GatewayTests: XCTestCase {
         let backlogReady = await newest(gateway, "s", atLeast: 50)
         XCTAssertTrue(backlogReady)
         let sub = try await gateway.subscribe(streamID: "s", lastEventID: nil)
-        var iterator = sub.frames.makeAsyncIterator()
-        var read: [GatewayFrame] = []
-        for _ in 0..<50 { if let f = await iterator.next() { read.append(f) } }
-        XCTAssertEqual(read.map(\.cursor.sequence), Array(1...50), "backlog delivered in full")
-        // Now stall: 20 live frames arrive, nobody reads.
+        // One reader task owns the iterator: it reads the backlog, signals,
+        // waits for the go-ahead, then drains. A watchdog cancels it after 5 s
+        // so a broken implementation fails instead of hanging.
+        let (readBacklog, readBacklogDone) = AsyncStream.makeStream(of: Void.self)
+        let (goAhead, goAheadSignal) = AsyncStream.makeStream(of: Void.self)
+        let reader = Task { () -> ([GatewayFrame], [GatewayFrame]) in
+            var iterator = sub.frames.makeAsyncIterator()
+            var first: [GatewayFrame] = []
+            while first.count < 50, let frame = await iterator.next() { first.append(frame) }
+            readBacklogDone.yield(); readBacklogDone.finish()
+            var gate = goAhead.makeAsyncIterator()
+            _ = await gate.next()
+            var rest: [GatewayFrame] = []
+            while let frame = await iterator.next() { rest.append(frame) }
+            return (first, rest)
+        }
+        let watchdog = Task { try? await Task.sleep(for: .seconds(5)); reader.cancel(); goAheadSignal.finish() }
+        var signal = readBacklog.makeAsyncIterator()
+        _ = await signal.next()
+        // Now stall: 20 live frames arrive while nobody reads.
         for i in 1...20 { upstream.send(.text("l\(i)")) }
         let written = await newest(gateway, "s", atLeast: 70)
         XCTAssertTrue(written)
         let cuts = await gateway.stats().slowConsumerCuts
         XCTAssertEqual(cuts, 1)
-        var rest: [GatewayFrame] = []
-        while let f = await iterator.next() { rest.append(f) }
+        goAheadSignal.yield(); goAheadSignal.finish()
+        let (read, rest) = await reader.value
+        watchdog.cancel()
+        XCTAssertEqual(read.map(\.cursor.sequence), Array(1...50), "backlog delivered in full")
         XCTAssertEqual(rest.map(\.cursor.sequence), [51, 52, 53, 54], "exactly subscriberQueueLimit live frames were buffered")
     }
 
