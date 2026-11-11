@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     container: swift:6.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Clean build (library + tests) with warnings as errors
         run: swift build --build-tests -Xswiftc -warnings-as-errors
       - name: Test
@@ -19,7 +19,7 @@ jobs:
     name: macOS · tests + generic iOS Simulator build
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Xcode version
         run: xcodebuild -version
       - name: Test (warnings as errors)
@@ -34,6 +34,6 @@ jobs:
     runs-on: ubuntu-latest
     container: swift:6.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run mutants
         run: bash scripts/mutation-check.sh
